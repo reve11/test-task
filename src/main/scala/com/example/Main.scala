@@ -11,7 +11,6 @@ import org.apache.spark.sql.{Encoder, Encoders, Row, SparkSession}
 object Main {
 
   private val FIVE_MINUTES: Long = Duration.of(5, ChronoUnit.MINUTES).getSeconds
-  private val HALF_FIVE_MINUTES: Long = FIVE_MINUTES / 2
   private val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
 
   def main(args: Array[String]): Unit = {
@@ -30,11 +29,11 @@ object Main {
     import org.apache.spark.sql.expressions.Window
 
     val categoryWindow = Window.partitionBy('category).orderBy('eventTime)
-    val globalWindow = Window.orderBy('category, 'eventTime)
+    val globalCategoryWindow = Window.orderBy('category, 'eventTime)
     val sessionWindow = Window.partitionBy('sessionId).orderBy('eventTime)
       .rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
-    val prevEvent = lag('eventTime, 1).over(categoryWindow).as("lastEvent")
-    val sessionId = sum($"isNewSession").over(globalWindow).as("sessionId")
+    val lastEvent = lag('eventTime, 1).over(categoryWindow).as("lastEvent")
+    val sessionId = sum($"isNewSession").over(globalCategoryWindow).as("sessionId")
     val sessionStart = min($"eventTime").over(sessionWindow).as("sessionStart")
     val sessionEnd = max($"eventTime").over(sessionWindow).as("sessionEnd")
 
@@ -50,19 +49,22 @@ object Main {
     val oneToFive = when($"spentTime" >= 60 and $"spentTime" <= 300, 1).otherwise(0)
       .as("from_one_to_five")
 
-    val groupedDf = spark.read
+    val parsed = spark.read
       .option("header", "true")
       .csv("/tmp/test_data.csv")
       .map(parseEvent)
-      .select($"*", $"eventTime", prevEvent)
+      .persist()
+
+    val groupedDf = parsed
+      .select($"*", lastEvent)
       .select($"*", when(sessionBoundaries, 1).otherwise(0).as("isNewSession"))
       .select($"*", sessionId)
       .select($"category", $"product", $"userId", $"eventType", $"eventTime", $"sessionId", sessionStart, sessionEnd)
 
     groupedDf.createOrReplaceTempView("sessioned_events")
 
-        spark.sql("select category, percentile_approx(sessionEnd - sessionStart, 0.5) as median_session_time from sessioned_events group by category")
-            .show()
+    spark.sql("select category, percentile_approx(sessionEnd - sessionStart, 0.5) as median_session_time from sessioned_events group by category")
+      .show()
 
     groupedDf
       .select($"*", userTimeSpent)
@@ -70,6 +72,25 @@ object Main {
       .agg(sum($"spentTime").as("spentTime"))
       .select($"*", ltOne, oneToFive, gtFive)
       .show()
+
+    val lastEventUserProduct = lag('eventTime, 1).over(Window.partitionBy('userId).orderBy('eventTime))
+      .as("lastUserEvent")
+    val tmpWindow = Window.partitionBy('userId).orderBy('userId, 'eventTime)
+    val isNewUserSession = when(lag('product, 1).over(tmpWindow).notEqual($"product")
+      .or(lastEventUserProduct.isNull), 1)
+      .otherwise(0).as("isNewSession")
+
+
+    val sessionTimeWindow = Window.partitionBy('sessionId).orderBy('eventTime).rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
+    parsed
+      .select($"*", lastEventUserProduct, isNewUserSession)
+      .select($"*", sum($"isNewSession").over(Window.orderBy('userId, 'eventTime)).as("sessionId"))
+      .select($"*", first($"eventTime").over(sessionTimeWindow).as("sessionStart"))
+      .select($"*", last($"eventTime").over(sessionTimeWindow).as("sessionEnd"))
+      .select($"sessionId", $"sessionEnd".minus($"sessionStart").as("sessionLength"), $"category", $"product")
+      .distinct()
+      //      .select(rank().over())
+      .show(100)
 
     spark.close()
 
