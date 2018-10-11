@@ -1,11 +1,19 @@
 # test-task
 
 On Task#1:
+To find session start/end I used first and last with differently ordered windows. Probably there is more efficient way
+with computing them in session id UDWF however I'm not sure how to implement it
+
+On Task#1 via window functions:
 Session boundaries defined as either previous event is null, meaning session just started, or difference between events
 is greater than some defined value (5 minutes in task#1).
 
+On Task#1 via UDWFs:
+I didn't use UDWF for session start/end as this is more or less copying max/min aggregate functions
+
 On Task#2.1:
-Median session duration were easy to express using just SQL query.
+Median session duration were easy to express using just SQL query. I deciced not to complicate it with counting number
+of elements and in case it is even to get a half sum
 
 On Task#2.2:
 I assumed that I should use sessions defined in Task#2 to count time, effectively meaning that users cannot have sessions
