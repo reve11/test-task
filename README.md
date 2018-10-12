@@ -1,8 +1,17 @@
 # test-task
 
+Usage: 
+1) gradle clean build
+2) spark-submit --class com.exmaple.Main --master master_url build/libs/test-1.0-SNAPSHOT.jar session_gap_in_seconds(example 300) file_uri(example file:///path/to/csv)
+
+General:
+Events with unparsable dates are discarded.
+
 On Task#1:
 To find session start/end I used first and last with differently ordered windows. Probably there is more efficient way
-with computing them in session id UDWF however I'm not sure how to implement it
+with computing them in session id UDWF however I'm not sure how to implement it. Also, I think it is worth trying to
+firstly compute start and end for each session and then join them with the original dataset and compare physical plans
+with my solution. 
 
 On Task#1 via window functions:
 Session boundaries defined as either previous event is null, meaning session just started, or difference between events

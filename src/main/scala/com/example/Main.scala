@@ -1,8 +1,8 @@
 package com.example
 
+import java.net.URI
 import java.time._
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
 import com.example.udwf.SessionIdUDWF
 import org.apache.spark.SparkConf
@@ -10,32 +10,43 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 
+import scala.util.Try
+
 object Main {
 
-  private val FIVE_MINUTES: Long = Duration.of(5, ChronoUnit.MINUTES).getSeconds
-  private val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
+  private val FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
 
   def main(args: Array[String]): Unit = {
 
+    if (args.length < 2) {
+      System.err.println(
+        """Application requires two arguments: session gap in seconds and file URI.
+          | Example: test.jar 300 file:///tmp/test.csv""".stripMargin)
+      System.exit(2)
+    }
+
+    val gap = Try(args(0).toInt)
+    if (gap.isFailure) {
+      System.err.println("""First argument should be an integer number""")
+      System.exit(2)
+    }
+    val fileUri = Try(new URI(args(1)))
+    if (fileUri.isFailure) {
+      System.err.println("""Second argument should a valid URI""")
+      System.exit(2)
+    }
 
     val conf: SparkConf = new SparkConf()
     val spark = SparkSession.builder()
       .config(conf)
-      .master("local[*]")
       .appName("test")
       .getOrCreate()
 
     import spark.implicits._
 
-    implicit val eventEncoder: Encoder[Event] = Encoders.product[Event]
+    val parsed = parseEvents(fileUri.get, spark)
 
-    val parsed = spark.read
-      .option("header", "true")
-      .csv("/tmp/test_data.csv")
-      .map(parseEvent)
-      .persist()
-
-    val sessionedEvents = getSessionedEventsByWindow(parsed, spark, FIVE_MINUTES)
+    val sessionedEvents = getSessionedEventsByWindow(parsed, spark, gap.get)
 
     //Task#2 1
     sessionedEvents.createOrReplaceTempView("sessioned_events")
@@ -83,6 +94,26 @@ object Main {
   }
 
   /**
+    * Parses events from file by specified URI. Unparsable events are discarded
+    *
+    * @param fileUri file URI
+    * @param spark   spark session
+    * @return Dataset of events
+    */
+  private[example] def parseEvents(fileUri: URI, spark: SparkSession): Dataset[Event] = {
+    implicit val eventEncoder: Encoder[Event] = Encoders.product[Event]
+    implicit val tryEncoder: Encoder[Try[Event]] = Encoders.kryo[Try[Event]]
+
+    spark.read
+      .option("header", "true")
+      .csv(fileUri.toString)
+      .map(parseEvent)
+      .filter(_.isSuccess)
+      .map(_.get)
+      .persist()
+  }
+
+  /**
     * Enrich events with session id and session start/end with the help of custom UDWF. Definition of a session:
     * it contains consecutive events that belong to a single category and are not more than gap seconds away from
     * each other.
@@ -92,7 +123,7 @@ object Main {
     * @param gap     time in seconds to define session boundaries
     * @return enriched dataframe
     */
-  private def getSessionedEventsByUDF(dataset: Dataset[Event], spark: SparkSession, gap: Long): DataFrame = {
+  private[example] def getSessionedEventsByUDF(dataset: Dataset[Event], spark: SparkSession, gap: Long): DataFrame = {
     import spark.implicits._
 
     val categoryWindow = Window.partitionBy('category).orderBy('eventTime)
@@ -115,7 +146,7 @@ object Main {
     * @param gap     time in seconds to define session boundaries
     * @return enriched data with sessions
     */
-  private def getSessionedEventsByWindow(dataset: Dataset[Event], spark: SparkSession, gap: Long): DataFrame = {
+  private[example] def getSessionedEventsByWindow(dataset: Dataset[Event], spark: SparkSession, gap: Long): DataFrame = {
     import spark.implicits._
 
     val categoryWindow = Window.partitionBy('category).orderBy('eventTime)
@@ -144,7 +175,7 @@ object Main {
     * @param spark   spark session
     * @return
     */
-  private def getUserSessionedEvents(dataset: Dataset[Event], spark: SparkSession): DataFrame = {
+  private[example] def getUserSessionedEvents(dataset: Dataset[Event], spark: SparkSession): DataFrame = {
     import spark.implicits._
 
     val userWindow = Window.partitionBy('userId).orderBy('eventTime)
@@ -169,7 +200,7 @@ object Main {
 
   case class Event(category: String, product: String, userId: String, eventTime: Long, eventType: String)
 
-  private val parseEvent: Row => Event = row => Event(row.getString(0), row.getString(1), row.getString(2),
-    LocalDateTime.parse(row.getString(3), formatter).toEpochSecond(ZoneOffset.UTC), row.getString(4))
+  private[example] val parseEvent: Row => Try[Event] = row => Try(Event(row.getString(0), row.getString(1), row.getString(2),
+    LocalDateTime.parse(row.getString(3), FORMATTER).toEpochSecond(ZoneOffset.UTC), row.getString(4)))
 
 }
