@@ -1,0 +1,11 @@
+category,product,userId,eventTime,eventType
+category1,test,user100,2018-03-01 12:00:02,test
+category1,test,user100,2018-03-01 12:00:03,test
+category1,test,user100,2018-03-01 12:05:05,test
+category1,test,user100,2018-03-01 12:05:06,test
+category1,test,user200,2018-03-01 12:10:10,test
+category1,test,user200,2018-03-01 12:10:11,test
+category1,test,user200,2018-03-01 12:12:11,test
+category1,test,user200,2018-03-01 12:12:15,test
+category1,test,user100,2018-03-01 12:11:10,test
+category1,test,user100,2018-03-01 12:11:15,test

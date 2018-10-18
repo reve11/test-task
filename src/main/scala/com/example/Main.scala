@@ -57,25 +57,7 @@ object Main {
       .show()
 
     //Task#2 2
-    val userCategoryWindow = Window.partitionBy('category, 'userId, 'sessionId).orderBy('eventTime)
-    val userTimeSpent = ($"eventTime" - coalesce(lag('eventTime, 1).over(userCategoryWindow), $"eventTime"))
-      .as("spentTime")
-    val categorySessionWindow = Window.partitionBy('category, 'sessionId).orderBy('category)
-    val ltOne = sum(when($"spentTime" < 60, 1).otherwise(0))
-      .as("less_than_one")
-    val gtFive = sum(when($"spentTime" > 300, 1).otherwise(0))
-      .as("more_than_five")
-    val oneToFive = sum(when($"spentTime" >= 60 and $"spentTime" <= 300, 1).otherwise(0))
-      .as("one_to_five")
-
-
-    sessionedEvents
-      .select($"*", userTimeSpent)
-      .groupBy($"category", $"userId", $"sessionId")
-      .agg(sum($"spentTime").as("spentTime"))
-      .groupBy($"category")
-      .agg(ltOne, oneToFive, gtFive)
-      .show()
+    getUniqueUsersLengths(sessionedEvents, spark).show()
 
     //Task#2 3
     val userSessionedDF = getUserSessionedEvents(parsed, spark)
@@ -91,6 +73,44 @@ object Main {
     spark.close()
 
 
+  }
+
+  /**
+    * Calculates for each category count of unique users spent less than 1 minute, from 1 to 5 minutes and more than 5
+    * minutes. Time spent by user is counted like sum of differences between user event times within one session.
+    *
+    * @param sessionedEvents user events with session ids
+    * @param spark spark session
+    * @return dataframe with columns: category, less_than_one, one_to_five, more_than_five which represent count of
+    *         unique users within time boundaries respectively
+    */
+  private[example] def getUniqueUsersLengths(sessionedEvents: DataFrame, spark: SparkSession): DataFrame = {
+    import spark.implicits._
+
+    val userCategoryWindow = Window.partitionBy('category, 'userId).orderBy('eventTime)
+    val userTimeSpent = when(lag('sessionId, 1).over(userCategoryWindow) === $"sessionId",
+      $"eventTime" - lag('eventTime, 1).over(userCategoryWindow))
+      .otherwise(lit(0L))
+    val ltOne = when(sum($"spentTime") < 60, 1).otherwise(0)
+      .as("less_than_one")
+    val gtFive = when(sum($"spentTime") > 300, 1).otherwise(0)
+      .as("more_than_five")
+    val oneToFive = when(sum($"spentTime") >= 60 and sum($"spentTime") <= 300, 1).otherwise(0)
+      .as("one_to_five")
+
+
+    sessionedEvents
+      .withColumn("spentTime", userTimeSpent)
+      .groupBy($"category", $"userId", $"sessionId")
+      .agg(ltOne.as("less_than_one"), oneToFive.as("one_to_five"), gtFive.as("more_than_five"))
+      .groupBy($"category", $"userId")
+      .agg(max($"less_than_one").as("less_than_one"),
+        max($"one_to_five").as("one_to_five"),
+        max($"more_than_five").as("more_than_five"))
+      .groupBy($"category")
+      .agg(sum($"less_than_one").as("less_than_one"),
+        sum($"one_to_five").as("one_to_five"),
+        sum($"more_than_five").as("more_than_five"))
   }
 
   /**
